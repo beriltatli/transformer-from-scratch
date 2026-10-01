@@ -1,7 +1,8 @@
 """Exact-zero proof that position t cannot see positions > t, nor any other batch element.
 
-Phase 1 runs it on a stack of causal self-attention blocks with residuals. The decoder joins
-the parametrisation in Phase 2.
+It runs twice: on a bare stack of causal self-attention blocks, where a failure points at the
+attention or the mask, and on the assembled Transformer from raw target embeddings to logits,
+which covers scaling, positions, cross-attention, feed-forward, norms and the tied generator.
 
 The detector is only worth something if it fires on broken models, so the second half of this
 file builds four realistic leaks and asserts each one is caught.
@@ -16,6 +17,7 @@ from torch import Tensor, nn
 
 from model.attention import MultiHeadAttention
 from model.masks import attention_mask, causal_mask, pad_mask
+from model.transformer import Transformer, TransformerConfig
 
 Forward = Callable[[Tensor], Tensor]
 BATCH, LENGTH, D_MODEL, PAD_ID = 3, 7, 16, 0
@@ -137,3 +139,55 @@ def test_detector_catches_soft_mask_that_allclose_would_miss(monkeypatch: pytest
     torch.manual_seed(0)
     leak = _max_leak(CausalStack(1, 4))
     assert 0 < leak < 1e-6, leak
+
+
+def _transformer(pre_norm: bool, positions: str) -> Transformer:
+    torch.manual_seed(0)
+    cfg = TransformerConfig(src_vocab=50, tgt_vocab=60, d_model=D_MODEL, n_heads=4, d_ff=32,
+                            n_enc=2, n_dec=3, dropout=0.0, pre_norm=pre_norm, positions=positions, max_len=32)
+    return Transformer(cfg).eval()
+
+
+def _source() -> Tensor:
+    src = torch.randint(4, 50, (BATCH, 6), generator=torch.Generator().manual_seed(5))
+    src[1, 4:] = PAD_ID
+    return src
+
+
+@pytest.mark.parametrize("pre_norm", [True, False])
+@pytest.mark.parametrize("positions", ["sinusoidal", "learned"])
+@pytest.mark.parametrize("padded", [False, True])
+def test_transformer_future_gradient_is_exactly_zero(pre_norm: bool, positions: str, padded: bool) -> None:
+    model = _transformer(pre_norm, positions)
+    memory, src_pad = model.encode(_source())
+    memory = memory.detach()
+    x, tokens = _inputs(6)
+    tgt_pad = pad_mask(tokens, PAD_ID) if padded else None
+    # Memory is a constant here, so cross-batch leakage through it is not what is being tested;
+    # it is shared per row and cannot carry another row's target.
+    leak = leak_map(lambda inp: model.decode_embedded(inp, memory, src_pad, tgt_pad)[0], x)
+    assert (leak == 0).all(), f"leak at (b, t) = {(leak != 0).nonzero().tolist()}"
+
+
+def test_transformer_future_tokens_leave_past_logits_bit_identical() -> None:
+    model = _transformer(pre_norm=True, positions="sinusoidal")
+    src = _source()
+    g = torch.Generator().manual_seed(7)
+    tgt = torch.randint(4, 60, (BATCH, LENGTH), generator=g)
+    base = model(src, tgt)
+    for t in range(LENGTH - 1):
+        changed = tgt.clone()
+        changed[:, t + 1 :] = torch.randint(4, 60, (BATCH, LENGTH - t - 1), generator=g)
+        out = model(src, changed)
+        assert torch.equal(out[:, : t + 1], base[:, : t + 1]), f"logits <= {t} changed"
+
+
+def test_transformer_output_depends_on_source() -> None:
+    # The other half of the contract: the decoder must see the encoder. A model that passed
+    # every leakage test by ignoring its inputs would be useless.
+    model = _transformer(pre_norm=True, positions="sinusoidal")
+    tgt = torch.randint(4, 60, (BATCH, LENGTH), generator=torch.Generator().manual_seed(8))
+    src = _source()
+    other = src.clone()
+    other[:, 0] = (other[:, 0] + 1 - 4) % 46 + 4
+    assert (model(src, tgt) - model(other, tgt)).abs().max() > 1e-3

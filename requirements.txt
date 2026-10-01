@@ -4,3 +4,4 @@ PyYAML==6.0.3
 sacrebleu==2.6.0
 matplotlib==3.11.2
 pytest==9.1.1
+tokenizers==0.23.2

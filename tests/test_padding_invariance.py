@@ -3,6 +3,8 @@ import torch
 
 from model.attention import MultiHeadAttention
 from model.masks import attention_mask, causal_mask
+from model.transformer import Transformer, TransformerConfig
+from tokenizer.bpe import PAD
 
 D_MODEL, N_HEADS = 32, 4
 LENGTHS = [5, 9, 2, 7]
@@ -57,3 +59,22 @@ def test_invariance_check_fails_without_pad_mask() -> None:
     alone = mha(x[:1, :n], x[:1, :n], x[:1, :n])[0]
     batched = mha(x, x, x)[0]
     assert (batched[TARGET, :n] - alone[0]).abs().max() > 1e-2
+
+
+@pytest.mark.parametrize("pre_norm", [True, False])
+def test_full_model_alone_equals_padded(pre_norm: bool) -> None:
+    torch.manual_seed(0)
+    model = Transformer(TransformerConfig(src_vocab=40, tgt_vocab=40, d_model=D_MODEL, n_heads=N_HEADS,
+                                          d_ff=64, n_enc=2, n_dec=2, dropout=0.0, pre_norm=pre_norm)).eval()
+    g = torch.Generator().manual_seed(3)
+    src_lens, tgt_lens = [4, 9, 2], [6, 3, 8]
+    src = torch.full((3, max(src_lens)), PAD)
+    tgt = torch.full((3, max(tgt_lens)), PAD)
+    for i, (s, t) in enumerate(zip(src_lens, tgt_lens)):
+        src[i, :s] = torch.randint(4, 40, (s,), generator=g)
+        tgt[i, :t] = torch.randint(4, 40, (t,), generator=g)
+
+    batched = model(src, tgt)
+    for i, (s, t) in enumerate(zip(src_lens, tgt_lens)):
+        alone = model(src[i : i + 1, :s], tgt[i : i + 1, :t])
+        torch.testing.assert_close(batched[i, :t], alone[0], atol=1e-5, rtol=0)

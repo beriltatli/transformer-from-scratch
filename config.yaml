@@ -1,0 +1,53 @@
+seed: 1234
+device: auto            # cuda > mps > cpu
+
+data:
+  url: https://object.pouta.csc.fi/OPUS-Tatoeba/v2023-04-12/moses/en-tr.txt.zip
+  dir: data
+  max_words: 40         # either side; Tatoeba's long tail is mostly multi-sentence entries
+  valid_size: 2000      # pairs, one per connected group
+  test_size: 2000
+  near_dup_ratio: 0.9   # difflib ratio on normalised source
+
+tokenizer:
+  vocab_size: 8000      # per side, specials included
+  min_frequency: 2
+
+model:
+  d_model: 256
+  n_heads: 4
+  d_ff: 1024
+  n_enc: 3
+  n_dec: 3
+  dropout: 0.1
+  pre_norm: true
+  positions: sinusoidal # sinusoidal | learned | none
+  max_len: 128          # learned positions only exist up to here
+  scale_embeddings: true
+  tie_output: true
+
+train:
+  max_tokens: 8192      # per batch, target side
+  steps: 20000
+  peak_lr: 0.0007
+  warmup: 4000
+  warmup_ramp: true
+  label_smoothing: 0.1
+  clip_norm: 1.0
+
+decode:
+  max_len_a: 2          # cap = a * src_len + b, in target tokens
+  max_len_b: 10
+
+overfit:
+  vocab_size: 120
+  steps: 400
+  peak_lr: 0.003
+  warmup: 50
+  model:
+    d_model: 64
+    n_heads: 4
+    d_ff: 128
+    n_enc: 2
+    n_dec: 2
+    dropout: 0.0
