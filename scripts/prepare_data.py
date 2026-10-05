@@ -75,8 +75,8 @@ def split(pairs, groups, valid_size: int, test_size: int, seed: int):
     return train, valid, test
 
 
-def near_duplicates(train_src: list[str], test_src: list[str], ratio: float) -> int:
-    """Test sources with a train source at difflib ratio >= `ratio` after normalisation.
+def near_duplicates(train_src: list[str], test_src: list[str], ratio: float) -> list[bool]:
+    """Per test source: is there a train source at difflib ratio >= `ratio` after normalisation.
 
     Candidates come from an inverted index on each test sentence's rarest word, so this misses
     a near-duplicate that differs exactly in that word. It is a lower bound.
@@ -88,19 +88,19 @@ def near_duplicates(train_src: list[str], test_src: list[str], ratio: float) -> 
         for w in set(key.split()):
             freq[w] += 1
             index[w].append(i)
-    count = 0
+    flags = []
     for s in test_src:
         key = normalise_key(s)
         words = [w for w in key.split() if w in index]
         if not words:
+            flags.append(False)
             continue
         rarest = min(words, key=lambda w: freq[w])
-        if any(
+        flags.append(any(
             difflib.SequenceMatcher(None, key, train_keys[i]).ratio() >= ratio
             for i in index[rarest][:2000]
-        ):
-            count += 1
-    return count
+        ))
+    return flags
 
 
 def main() -> None:
@@ -125,10 +125,10 @@ def main() -> None:
         "train": len(train), "valid": len(valid), "test": len(test),
         "test_src_exact_in_train": sum(normalise_key(s) in train_src_keys for s, _ in test),
         "test_tgt_exact_in_train": sum(normalise_key(t) in train_tgt_keys for _, t in test),
-        "test_src_near_dup_in_train": near_duplicates(
-            [s for s, _ in train], [s for s, _ in test], cfg["data"]["near_dup_ratio"]
-        ),
     }
+    near_dup = near_duplicates([s for s, _ in train], [s for s, _ in test], cfg["data"]["near_dup_ratio"])
+    report["test_src_near_dup_in_train"] = sum(near_dup)
+    (out / "test_near_dup.json").write_text(json.dumps(near_dup))
     (out / "split_report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 

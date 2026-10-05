@@ -27,13 +27,16 @@ model:
   tie_output: true
 
 train:
-  max_tokens: 8192      # per batch, target side
-  steps: 20000
+  # Padded positions per batch. Measured on an 8 GB M3 (MPS): 4096 runs at 200 ms/step and
+  # ~13k real target tokens/s; 8192 does not fit in unified memory and stalls in swap.
+  max_tokens: 4096
+  steps: 10000          # ~4.4 epochs, ~34 min at the measured rate
   peak_lr: 0.0007
-  warmup: 4000
+  warmup: 2000
   warmup_ramp: true
   label_smoothing: 0.1
   clip_norm: 1.0
+  eval_every: 1000
 
 decode:
   max_len_a: 2          # cap = a * src_len + b, in target tokens
